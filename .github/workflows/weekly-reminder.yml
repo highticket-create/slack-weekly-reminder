@@ -1,0 +1,83 @@
+name: Weekly Slack Reminder (All My Channels)
+
+on:
+  schedule:
+    # GitHub Actions uses UTC; we run two times and gate by local time.
+    - cron: "0 14 * * 2"
+    - cron: "0 15 * * 2"
+  workflow_dispatch:
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run weekly reminder
+        env:
+          SLACK_USER_TOKEN: ${{ secrets.SLACK_USER_TOKEN }}
+          REMINDER_TEXT: "Hey, checking in -- how's your progress coming along? Are you running into any roadblocks or have any questions?"
+          SKIP_CHANNEL_NAMES: "announcements"
+          DRY_RUN: "true"
+          TIMEZONE: "America/New_York"
+        run: |
+          python3 - << 'PY'
+          import os, time, json, datetime
+          import urllib.request, urllib.parse
+          from zoneinfo import ZoneInfo
+
+          token = os.getenv("SLACK_USER_TOKEN", "").strip()
+          reminder_text = os.getenv("REMINDER_TEXT", "").strip()
+          skip_names = {s.strip() for s in os.getenv("SKIP_CHANNEL_NAMES", "").split(",") if s.strip()}
+          dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+          tz_name = os.getenv("TIMEZONE", "America/New_York")
+
+          if not token:
+              print("No SLACK_USER_TOKEN set yet (expected while waiting for approval). Exiting.")
+              raise SystemExit(0)
+
+          tz = ZoneInfo(tz_name)
+          now = datetime.datetime.now(tz)
+
+          if not (now.weekday() == 1 and now.hour == 10 and now.minute == 0):
+              print(f"Not posting now. Local time: {now.isoformat()}")
+              raise SystemExit(0)
+
+          def api(method, params=None, body=None):
+              url = f"https://slack.com/api/{method}"
+              headers = {"Authorization": f"Bearer {token}"}
+              if body is None:
+                  data = urllib.parse.urlencode(params or {}).encode()
+                  headers["Content-Type"] = "application/x-www-form-urlencoded"
+              else:
+                  data = json.dumps(body).encode()
+                  headers["Content-Type"] = "application/json"
+              req = urllib.request.Request(url, data=data, headers=headers)
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read())
+
+          channels = []
+          cursor = None
+          while True:
+              params = {
+                  "types": "public_channel,private_channel",
+                  "exclude_archived": "true",
+                  "limit": 200
+              }
+              if cursor:
+                  params["cursor"] = cursor
+              res = api("users.conversations", params=params)
+              channels.extend(res["channels"])
+              cursor = res.get("response_metadata", {}).get("next_cursor")
+              if not cursor:
+                  break
+
+          targets = [(c["id"], c.get("name")) for c in channels if c.get("name") not in skip_names]
+
+          print(f"Targeting {len(targets)} channels")
+          if dry_run:
+              print("DRY RUN — not posting")
+              raise SystemExit(0)
+
+          for cid, name in targets:
+              api("chat.postMessage", body={"channel": cid, "text": reminder_text})
+              time.sleep(0.3)
+          PY
