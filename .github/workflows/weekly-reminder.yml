@@ -15,7 +15,7 @@ jobs:
         env:
           SLACK_USER_TOKEN: ${{ secrets.SLACK_USER_TOKEN }}
           REMINDER_TEXT: "Hey, checking in -- how's your progress coming along? Are you running into any roadblocks or have any questions?"
-          SKIP_CHANNEL_NAMES: "announcements"
+          SKIP_CHANNEL_NAMES: "announcements, coaching-comms-new"
           DRY_RUN: "false"
           TIMEZONE: "America/New_York"
         run: |
