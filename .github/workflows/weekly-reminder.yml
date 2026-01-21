@@ -2,7 +2,9 @@ name: Weekly Slack Reminder (All My Channels)
 
 on:
   schedule:
-    # GitHub Actions uses UTC; we run two times and gate by local time.
+    # GitHub Actions runs cron in UTC.
+    # We run at 14:00 and 15:00 UTC on Tuesdays, then gate by America/New_York time
+    # so it posts once between 10:00–10:10 AM ET (covers DST changes).
     - cron: "0 14 * * 2"
     - cron: "0 15 * * 2"
   workflow_dispatch:
@@ -10,74 +12,115 @@ on:
 jobs:
   post:
     runs-on: ubuntu-latest
+
     steps:
       - name: Run weekly reminder
         env:
           SLACK_USER_TOKEN: ${{ secrets.SLACK_USER_TOKEN }}
           REMINDER_TEXT: "Hey, checking in -- how's your progress coming along? Are you running into any roadblocks or have any questions?"
-          SKIP_CHANNEL_NAMES: "announcements, coaching-comms-new"
+          SKIP_CHANNEL_NAMES: "announcements"
           DRY_RUN: "false"
           TIMEZONE: "America/New_York"
-run: |
-  python3 - << 'PY'
-  import os, time, json, datetime
-  import urllib.request, urllib.parse
-  from zoneinfo import ZoneInfo
+        run: |
+          python3 - << 'PY'
+          import os, json, datetime
+          import urllib.request, urllib.parse
+          from zoneinfo import ZoneInfo
 
-  token = os.getenv("SLACK_USER_TOKEN", "").strip()
-  reminder_text = os.getenv("REMINDER_TEXT", "").strip()
-  skip_names = {s.strip() for s in os.getenv("SKIP_CHANNEL_NAMES", "").split(",") if s.strip()}
-  dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
-  tz_name = os.getenv("TIMEZONE", "America/New_York")
+          token = os.getenv("SLACK_USER_TOKEN", "").strip()
+          reminder_text = os.getenv("REMINDER_TEXT", "").strip()
+          skip_names = {s.strip().lstrip("#") for s in os.getenv("SKIP_CHANNEL_NAMES", "").split(",") if s.strip()}
+          dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+          tz_name = os.getenv("TIMEZONE", "America/New_York")
 
-  if not token:
-      print("No SLACK_USER_TOKEN set.")
-      raise SystemExit(1)
+          if not token:
+              print("No SLACK_USER_TOKEN set (missing GitHub secret?).")
+              raise SystemExit(1)
 
-  tz = ZoneInfo(tz_name)
-  now = datetime.datetime.now(tz)
-  is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
+          # Gate so it only posts once between 10:00–10:10 AM ET on Tuesdays
+          tz = ZoneInfo(tz_name)
+          now = datetime.datetime.now(tz)
+          is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
 
-  # Allow posting once between 10:00–10:10 AM ET on Tuesdays
-  in_window = (now.weekday() == 1) and (now.hour == 10) and (0 <= now.minute <= 10)
-  if (not is_manual) and (not in_window):
-      print(f"Outside posting window. Now={now.isoformat()}")
-      raise SystemExit(0)
+          in_window = (now.weekday() == 1) and (now.hour == 10) and (0 <= now.minute <= 10)
+          if (not is_manual) and (not in_window):
+              print(f"Outside posting window. Now={now.isoformat()} ({tz_name})")
+              raise SystemExit(0)
 
-  def api(method, body=None, params=None):
-      url = f"https://slack.com/api/{method}"
-      headers = {"Authorization": f"Bearer {token}"}
-      if params:
-          url += "?" + urllib.parse.urlencode(params)
-          req = urllib.request.Request(url, headers=headers)
-      else:
-          data = json.dumps(body).encode()
-          headers["Content-Type"] = "application/json"
-          req = urllib.request.Request(url, data=data, headers=headers)
-      with urllib.request.urlopen(req) as r:
-          return json.loads(r.read())
+          def api_get(method, params=None):
+              url = f"https://slack.com/api/{method}"
+              if params:
+                  url += "?" + urllib.parse.urlencode(params)
+              req = urllib.request.Request(
+                  url,
+                  headers={"Authorization": f"Bearer {token}"}
+              )
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read())
 
-  channels = []
-  cursor = None
-  while True:
-      params = {"types": "public_channel,private_channel", "exclude_archived": "true", "limit": 200}
-      if cursor:
-          params["cursor"] = cursor
-      res = api("users.conversations", params=params)
-      channels.extend(res.get("channels", []))
-      cursor = res.get("response_metadata", {}).get("next_cursor")
-      if not cursor:
-          break
+          def api_post(method, body):
+              url = f"https://slack.com/api/{method}"
+              data = json.dumps(body).encode("utf-8")
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json"
+                  }
+              )
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read())
 
-  targets = [(c["id"], c.get("name")) for c in channels if c.get("name") not in skip_names]
-  print(f"Targeting {len(targets)} channels")
+          # Pull all channels you're a member of (public + private)
+          channels = []
+          cursor = None
+          while True:
+              params = {
+                  "types": "public_channel,private_channel",
+                  "exclude_archived": "true",
+                  "limit": 200,
+              }
+              if cursor:
+                  params["cursor"] = cursor
 
-  if dry_run:
-      print("DRY RUN — not posting")
-      raise SystemExit(0)
+              res = api_get("users.conversations", params=params)
+              if not res.get("ok"):
+                  print("users.conversations failed:", res)
+                  raise SystemExit(1)
 
-  for cid, name in targets:
-      api("chat.postMessage", body={"channel": cid, "text": reminder_text})
-      print(f"Posted to #{name}")
-  PY
+              channels.extend(res.get("channels", []))
+              cursor = res.get("response_metadata", {}).get("next_cursor")
+              if not cursor:
+                  break
 
+          # Filter out skipped channel names
+          targets = []
+          for c in channels:
+              name = (c.get("name") or "").lstrip("#")
+              if name and name in skip_names:
+                  continue
+              targets.append((c["id"], name))
+
+          print(f"Targeting {len(targets)} channels. Skipping: {sorted(skip_names)}")
+
+          if dry_run:
+              print("DRY_RUN=true — not posting.")
+              raise SystemExit(0)
+
+          # Post
+          failures = 0
+          for cid, name in targets:
+              resp = api_post("chat.postMessage", {"channel": cid, "text": reminder_text})
+              if not resp.get("ok"):
+                  failures += 1
+                  print(f"FAILED to post to #{name} ({cid}): {resp}")
+              else:
+                  print(f"Posted to #{name} ({cid})")
+
+          if failures:
+              print(f"Done with {failures} failures.")
+              raise SystemExit(1)
+
+          print("Done. All posts succeeded.")
+          PY
