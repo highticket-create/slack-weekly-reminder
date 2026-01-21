@@ -18,7 +18,7 @@ jobs:
           SKIP_CHANNEL_NAMES: "announcements, coaching-comms-new"
           DRY_RUN: "false"
           TIMEZONE: "America/New_York"
-          run: |
+run: |
   python3 - << 'PY'
   import os, time, json, datetime
   import urllib.request, urllib.parse
@@ -40,7 +40,6 @@ jobs:
 
   # Allow posting once between 10:00–10:10 AM ET on Tuesdays
   in_window = (now.weekday() == 1) and (now.hour == 10) and (0 <= now.minute <= 10)
-
   if (not is_manual) and (not in_window):
       print(f"Outside posting window. Now={now.isoformat()}")
       raise SystemExit(0)
@@ -61,15 +60,11 @@ jobs:
   channels = []
   cursor = None
   while True:
-      params = {
-          "types": "public_channel,private_channel",
-          "exclude_archived": "true",
-          "limit": 200,
-      }
+      params = {"types": "public_channel,private_channel", "exclude_archived": "true", "limit": 200}
       if cursor:
           params["cursor"] = cursor
       res = api("users.conversations", params=params)
-      channels.extend(res["channels"])
+      channels.extend(res.get("channels", []))
       cursor = res.get("response_metadata", {}).get("next_cursor")
       if not cursor:
           break
@@ -85,3 +80,4 @@ jobs:
       api("chat.postMessage", body={"channel": cid, "text": reminder_text})
       print(f"Posted to #{name}")
   PY
+
