@@ -18,8 +18,8 @@ jobs:
         env:
           SLACK_USER_TOKEN: ${{ secrets.SLACK_USER_TOKEN }}
           REMINDER_TEXT: "Hey, checking in -- how's your progress coming along? Are you running into any roadblocks or have any questions?"
-          SKIP_CHANNEL_NAMES: "announcements"
-          DRY_RUN: "false"
+          SKIP_CHANNEL_NAMES: "announcements, coaching-comms-new, sales, wins, askbrook-channel"
+          DRY_RUN: "true"
           TIMEZONE: "America/New_York"
         run: |
           python3 - << 'PY'
@@ -31,7 +31,13 @@ jobs:
           reminder_text = os.getenv("REMINDER_TEXT", "").strip()
           skip_names = {s.strip().lstrip("#") for s in os.getenv("SKIP_CHANNEL_NAMES", "").split(",") if s.strip()}
           dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+          event_name = os.getenv("GITHUB_EVENT_NAME", "")
           tz_name = os.getenv("TIMEZONE", "America/New_York")
+
+# Safety: NEVER post unless this is a scheduled run
+if event_name != "schedule":
+    print(f"Not a scheduled run ({event_name}). Exiting to prevent posting.")
+    raise SystemExit(0)
 
           if not token:
               print("No SLACK_USER_TOKEN set (missing GitHub secret?).")
