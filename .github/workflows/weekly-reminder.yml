@@ -36,10 +36,11 @@ jobs:
 
           tz = ZoneInfo(tz_name)
           now = datetime.datetime.now(tz)
+          is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
 
 # Allow posting once between 10:00–10:10 AM ET on Tuesdays
 in_window = (now.weekday() == 1) and (now.hour == 10) and (0 <= now.minute <= 10)
-if not in_window:
+if (not is_manual) and (not in_window):
     print(f"Outside posting window. Now={now.isoformat()}")
     raise SystemExit(0)
 
