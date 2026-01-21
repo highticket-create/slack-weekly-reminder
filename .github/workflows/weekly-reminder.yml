@@ -37,9 +37,12 @@ jobs:
           tz = ZoneInfo(tz_name)
           now = datetime.datetime.now(tz)
 
-          if not (now.weekday() == 1 and now.hour == 10 and now.minute == 0):
-              print(f"Not posting now. Local time: {now.isoformat()}")
-              raise SystemExit(0)
+# Allow posting once between 10:00–10:10 AM ET on Tuesdays
+in_window = (now.weekday() == 1) and (now.hour == 10) and (0 <= now.minute <= 10)
+if not in_window:
+    print(f"Outside posting window. Now={now.isoformat()}")
+    raise SystemExit(0)
+
 
           def api(method, params=None, body=None):
               url = f"https://slack.com/api/{method}"
